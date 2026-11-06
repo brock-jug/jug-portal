@@ -2,7 +2,7 @@
 
 ## M0 Foundation
 - [x] M0.1 Scaffold Next.js + Tailwind, vitest, docker-compose Postgres, .env.example, /staff and /order route stubs, money math (zero tax/deposit) + tests
-- [ ] M0.2 Prisma: install, full schema per domain model (staff, users, accounts, products & lookups, orders, order_items, inventory, kegs, bols, pickups, notes/todos, accounting_log, tbs, banners), initial migration
+- [x] M0.2 Prisma: install, full schema per domain model (staff, users, accounts, products & lookups, orders, order_items, inventory, kegs, bols, pickups, notes/todos, accounting_log, tbs, banners), initial migration
 - [ ] M0.3 Pricing module (account pricing class → product price lookup) + unit tests
 - [ ] M0.4 NextAuth credentials (two providers: staff, customer), bcrypt, session typing
 - [ ] M0.5 Permission middleware (staff codes OH/AC/DM/BO/IN/PP/SC/PO/US/ST/AL/AAC/IP or ALL; customers limited to /order) + tests

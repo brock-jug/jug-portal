@@ -1,0 +1,493 @@
+// JUG Portal schema. Money columns are Decimal(12,2).
+// NOTE: orders.tax / orders.deposit / order_items.deposit / products.deposit are kept
+// ONLY so legacy data imports verbatim (M5). New orders always write 0 (see src/lib/money.ts).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ───────── Enums ─────────
+enum RecordStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum PaymentMethod {
+  CHEQUE
+  CREDIT_CARD
+  COD
+  EFT
+  INVOICE
+  CASH
+  OTHER
+}
+
+enum ShippingStatus {
+  PENDING
+  SCHEDULED
+  DELIVERED
+  CANCELLED
+}
+
+enum SalesChannel {
+  WHOLESALE
+  INDIVIDUAL // Shopify / consumer
+}
+
+// ───────── Staff & users ─────────
+model Staff {
+  id           Int          @id @default(autoincrement()) @map("staff_id")
+  firstName    String       @map("first_name")
+  lastName     String       @map("last_name")
+  email        String       @unique
+  passwordHash String       @map("password_hash")
+  status       RecordStatus @default(ACTIVE)
+  /// "ALL" or comma-separated codes: OH,AC,DM,BO,IN,PP,SC,PO,US,ST,AL,AAC,IP
+  permissions  String       @default("")
+
+  accounts          Account[]
+  inventoryTx       InventoryTransaction[]
+  callNotes         CallNote[]
+  todos             Todo[]
+  pickups           Pickup[]
+  accountingEntries AccountingLog[]
+
+  @@map("staff")
+}
+
+model User {
+  id           Int          @id @default(autoincrement()) @map("user_id")
+  email        String       @unique
+  passwordHash String       @map("password_hash") // bcrypt; legacy hashes imported as-is
+  firstName    String       @map("first_name")
+  lastName     String       @map("last_name")
+  phone        String?
+  newsletter   Boolean      @default(false)
+  reminder     Boolean      @default(false)
+  status       RecordStatus @default(ACTIVE)
+
+  accounts UserAccount[]
+
+  @@map("users")
+}
+
+model UserAccount {
+  userId    Int     @map("user_id")
+  accountId Int     @map("account_id")
+  user      User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  account   Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@id([userId, accountId])
+  @@map("user_accounts")
+}
+
+// ───────── Accounts ─────────
+model AccountType {
+  id       Int       @id @default(autoincrement())
+  name     String    @unique // bar, restaurant, LCBO, individual, ...
+  accounts Account[]
+
+  @@map("account_types")
+}
+
+model Banner {
+  id        Int        @id @default(autoincrement()) @map("banner_id")
+  name      String     @unique
+  accounts  Account[]
+  tbsStores TbsStore[]
+
+  @@map("banners")
+}
+
+model PricingCategory {
+  id       Int            @id @default(autoincrement())
+  name     String         @unique
+  accounts Account[]
+  prices   ProductPrice[]
+
+  @@map("pricing_categories")
+}
+
+model Account {
+  id                        Int          @id @default(autoincrement()) @map("account_id")
+  name                      String
+  licenseNum                String?      @map("license_num")
+  accountTypeId             Int?         @map("account_type_id")
+  status                    RecordStatus @default(ACTIVE)
+  isProspect                Boolean      @default(false) @map("is_prospect") // legacy 'realfake'
+  address                   String?
+  billingAddress            String?      @map("billing_address")
+  city                      String?
+  province                  String?      @default("ON")
+  postalCode                String?      @map("postal_code")
+  phone                     String?
+  lat                       Float?
+  lng                       Float?
+  salesRepId                Int?         @map("sales_rep_id")
+  bannerId                  Int?         @map("banner_id")
+  channel                   String?
+  deliveryDay               Int?         @map("delivery_day")
+  deliveryWeek              Int?         @map("delivery_week")
+  deliveryInventorySourceId Int?         @map("delivery_inventory_source_id")
+  callFrequency             Int?         @map("call_frequency")
+  callDays                  String?      @map("call_days")
+  callWeeks                 String?      @map("call_weeks")
+  allowCod                  Boolean      @default(false) @map("allow_cod")
+  allowDelayedCc            Boolean      @default(false) @map("allow_delayed_cc")
+  allowInvoice              Boolean      @default(false) @map("allow_invoice")
+  credit                    Decimal      @default(0) @db.Decimal(12, 2)
+  creditLimit               Decimal      @default(0) @map("credit_limit") @db.Decimal(12, 2)
+  pricingCategoryId         Int?         @map("pricing_category_id")
+  pricingClass              String?      @map("pricing_class")
+  dateOpened                DateTime?    @map("date_opened")
+  notes                     String?
+  qbToken                   String?      @map("qb_token")
+  deliveryInstructions      String?      @map("delivery_instructions")
+
+  accountType             AccountType?     @relation(fields: [accountTypeId], references: [id])
+  salesRep                Staff?           @relation(fields: [salesRepId], references: [id])
+  banner                  Banner?          @relation(fields: [bannerId], references: [id])
+  pricingCategory         PricingCategory? @relation(fields: [pricingCategoryId], references: [id])
+  deliveryInventorySource InventorySource? @relation("AccountDeliverySource", fields: [deliveryInventorySourceId], references: [id])
+
+  users      UserAccount[]
+  orders     Order[]
+  kegs       KegBalance[]
+  bols       Bol[]
+  pickups    Pickup[]
+  callNotes  CallNote[]
+  todos      Todo[]
+  accounting AccountingLog[]
+
+  @@index([status, isProspect])
+  @@index([city])
+  @@index([salesRepId])
+  @@index([bannerId])
+  @@map("accounts")
+}
+
+// ───────── Products ─────────
+model ProductParent {
+  id       Int       @id @default(autoincrement())
+  name     String    @unique // 4 brand lines
+  products Product[]
+
+  @@map("products_parent")
+}
+
+model ProductCategory {
+  id       Int       @id @default(autoincrement())
+  name     String    @unique // Keg, Case, Can, Bottle, Glassware, ...
+  products Product[]
+
+  @@map("product_categories")
+}
+
+model ProductOwner {
+  id       Int       @id @default(autoincrement())
+  name     String    @unique
+  products Product[]
+
+  @@map("product_owners")
+}
+
+model ProductFactor {
+  id       Int       @id @default(autoincrement())
+  name     String    @unique // pack size / format
+  units    Int       @default(1)
+  products Product[]
+
+  @@map("product_factors")
+}
+
+model Product {
+  id         Int          @id @default(autoincrement()) @map("product_id")
+  name       String
+  parentId   Int?         @map("parent_id")
+  categoryId Int?         @map("category_id")
+  ownerId    Int?         @map("owner_id")
+  factorId   Int?         @map("factor_id")
+  deposit    Decimal      @default(0) @db.Decimal(12, 2) // legacy only; always 0 for new orders
+  status     RecordStatus @default(ACTIVE)
+
+  parent   ProductParent?   @relation(fields: [parentId], references: [id])
+  category ProductCategory? @relation(fields: [categoryId], references: [id])
+  owner    ProductOwner?    @relation(fields: [ownerId], references: [id])
+  factor   ProductFactor?   @relation(fields: [factorId], references: [id])
+
+  prices      ProductPrice[]
+  orderItems  OrderItem[]
+  invTx       InventoryTransaction[]
+  kegs        KegBalance[]
+  bolItems    BolItem[]
+  pickupItems PickupItem[]
+  tbsListings TbsListing[]
+
+  @@map("products")
+}
+
+model ProductPrice {
+  productId         Int     @map("product_id")
+  pricingCategoryId Int     @map("pricing_category_id")
+  price             Decimal @db.Decimal(12, 2)
+
+  product         Product         @relation(fields: [productId], references: [id], onDelete: Cascade)
+  pricingCategory PricingCategory @relation(fields: [pricingCategoryId], references: [id], onDelete: Cascade)
+
+  @@id([productId, pricingCategoryId])
+  @@map("product_prices")
+}
+
+// ───────── Orders ─────────
+model Order {
+  id                   Int            @id @default(autoincrement()) @map("order_id")
+  accountId            Int            @map("account_id")
+  dateOrdered          DateTime       @map("date_ordered")
+  subtotal             Decimal        @default(0) @db.Decimal(12, 2)
+  tax                  Decimal        @default(0) @db.Decimal(12, 2) // legacy only; 0 for new orders
+  deposit              Decimal        @default(0) @db.Decimal(12, 2) // legacy only; 0 for new orders
+  total                Decimal        @default(0) @db.Decimal(12, 2)
+  creditApplied        Decimal        @default(0) @map("credit_applied") @db.Decimal(12, 2)
+  isPaid               Boolean        @default(false) @map("is_paid")
+  paidDate             DateTime?      @map("paid_date")
+  paymentMethod        PaymentMethod? @map("payment_method")
+  manualPaymentRef     String?        @map("manual_payment_ref")
+  manualPaymentNotes   String?        @map("manual_payment_notes")
+  shippingStatus       ShippingStatus @default(PENDING) @map("shipping_status")
+  estDeliveryDate      DateTime?      @map("est_delivery_date")
+  deliveryDate         DateTime?      @map("delivery_date")
+  inventorySourceId    Int?           @map("inventory_source_id")
+  channel              SalesChannel   @default(WHOLESALE)
+  purchaseOrder        String?        @map("purchase_order")
+  referenceId          String?        @map("reference_id") // gateway / 'Shopify Order #NNNN'
+  authId               String?        @map("auth_id")
+  cardType             String?        @map("card_type")
+  lastFour             String?        @map("last_four") // last 4 digits only, never full PAN
+  voidDate             DateTime?      @map("void_date")
+  creditOrderId        Int?           @map("credit_order_id")
+  isCreditMemo         Boolean        @default(false) @map("is_credit_memo")
+  notes                String?
+  deliveryInstructions String?        @map("delivery_instructions")
+
+  account         Account          @relation(fields: [accountId], references: [id])
+  inventorySource InventorySource? @relation(fields: [inventorySourceId], references: [id])
+  creditOrder     Order?           @relation("CreditMemo", fields: [creditOrderId], references: [id])
+  creditMemos     Order[]          @relation("CreditMemo")
+  items           OrderItem[]
+  bols            Bol[]
+
+  @@index([accountId, dateOrdered])
+  @@index([dateOrdered])
+  @@index([isPaid])
+  @@index([shippingStatus])
+  @@map("orders")
+}
+
+model OrderItem {
+  id        Int     @id @default(autoincrement())
+  orderId   Int     @map("order_id")
+  productId Int     @map("product_id")
+  qty       Int
+  unitPrice Decimal @map("unit_price") @db.Decimal(12, 2)
+  deposit   Decimal @default(0) @db.Decimal(12, 2) // legacy only
+
+  order   Order   @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product Product @relation(fields: [productId], references: [id])
+
+  @@index([orderId])
+  @@index([productId])
+  @@map("order_items")
+}
+
+// ───────── Inventory ─────────
+model InventorySource {
+  id           Int     @id @default(autoincrement()) @map("source_id")
+  name         String  @unique // Warehouse Floor, driver fridges, 3PLs ...
+  isThirdParty Boolean @default(false) @map("is_third_party")
+
+  orders   Order[]
+  accounts Account[]              @relation("AccountDeliverySource")
+  txFrom   InventoryTransaction[] @relation("TxSource")
+  txTo     InventoryTransaction[] @relation("TxDestination")
+
+  @@map("inventory_sources")
+}
+
+model InventoryTransaction {
+  id            Int      @id @default(autoincrement())
+  actionType    String   @map("action_type")
+  category      String?
+  sourceId      Int?     @map("source_id")
+  destinationId Int?     @map("destination_id")
+  productId     Int      @map("product_id")
+  qty           Int
+  orderType     String?  @map("order_type")
+  staffId       Int?     @map("staff_id")
+  date          DateTime
+
+  source      InventorySource? @relation("TxSource", fields: [sourceId], references: [id])
+  destination InventorySource? @relation("TxDestination", fields: [destinationId], references: [id])
+  product     Product          @relation(fields: [productId], references: [id])
+  staff       Staff?           @relation(fields: [staffId], references: [id])
+
+  @@index([productId, date])
+  @@index([sourceId])
+  @@index([destinationId])
+  @@map("inventory_transactions")
+}
+
+model KegBalance {
+  id        Int @id @default(autoincrement())
+  accountId Int @map("account_id")
+  productId Int @map("product_id")
+  kegsOut   Int @default(0) @map("kegs_out")
+  returned  Int @default(0)
+
+  account Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  product Product @relation(fields: [productId], references: [id])
+
+  @@unique([accountId, productId])
+  @@map("kegs")
+}
+
+// ───────── Bills of lading & pickups ─────────
+model Bol {
+  id             Int            @id @default(autoincrement()) @map("bol_id")
+  accountId      Int            @map("account_id")
+  orderId        Int?           @map("order_id")
+  shippingStatus ShippingStatus @default(PENDING) @map("shipping_status")
+  createdAt      DateTime       @default(now()) @map("created_at")
+
+  account Account   @relation(fields: [accountId], references: [id])
+  order   Order?    @relation(fields: [orderId], references: [id])
+  items   BolItem[]
+
+  @@map("bols")
+}
+
+model BolItem {
+  id        Int @id @default(autoincrement())
+  bolId     Int @map("bol_id")
+  productId Int @map("product_id")
+  qty       Int
+
+  bol     Bol     @relation(fields: [bolId], references: [id], onDelete: Cascade)
+  product Product @relation(fields: [productId], references: [id])
+
+  @@map("bol_items")
+}
+
+model Pickup {
+  id        Int      @id @default(autoincrement()) @map("pickup_id")
+  accountId Int      @map("account_id")
+  staffId   Int?     @map("staff_id")
+  date      DateTime
+  notes     String?
+
+  account Account      @relation(fields: [accountId], references: [id])
+  staff   Staff?       @relation(fields: [staffId], references: [id])
+  items   PickupItem[]
+
+  @@map("pickups")
+}
+
+model PickupItem {
+  id        Int @id @default(autoincrement())
+  pickupId  Int @map("pickup_id")
+  productId Int @map("product_id")
+  qty       Int
+
+  pickup  Pickup  @relation(fields: [pickupId], references: [id], onDelete: Cascade)
+  product Product @relation(fields: [productId], references: [id])
+
+  @@map("pickup_items")
+}
+
+// ───────── Rep activity & accounting ─────────
+model CallNote {
+  id        Int      @id @default(autoincrement())
+  accountId Int      @map("account_id")
+  staffId   Int?     @map("staff_id")
+  note      String
+  createdAt DateTime @default(now()) @map("created_at")
+
+  account Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  staff   Staff?  @relation(fields: [staffId], references: [id])
+
+  @@map("call_notes")
+}
+
+model Todo {
+  id        Int       @id @default(autoincrement())
+  accountId Int?      @map("account_id")
+  staffId   Int?      @map("staff_id")
+  text      String
+  dueDate   DateTime? @map("due_date")
+  done      Boolean   @default(false)
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  account Account? @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  staff   Staff?   @relation(fields: [staffId], references: [id])
+
+  @@map("todos")
+}
+
+model AccountingLog {
+  id        Int      @id @default(autoincrement())
+  eventType String   @map("event_type")
+  accountId Int?     @map("account_id")
+  orderId   Int?     @map("order_id")
+  staffId   Int?     @map("staff_id")
+  amount    Decimal? @db.Decimal(12, 2)
+  details   String?
+  createdAt DateTime @default(now()) @map("created_at")
+
+  account Account? @relation(fields: [accountId], references: [id])
+  staff   Staff?   @relation(fields: [staffId], references: [id])
+
+  @@index([createdAt])
+  @@map("accounting_log")
+}
+
+// ───────── The Beer Store (TBS) channel ─────────
+model TbsStore {
+  id       Int     @id @default(autoincrement())
+  storeNum String  @unique @map("store_num")
+  name     String
+  city     String?
+  bannerId Int?    @map("banner_id")
+
+  banner Banner?   @relation(fields: [bannerId], references: [id])
+  sales  TbsSale[]
+
+  @@map("tbs_stores")
+}
+
+model TbsListing {
+  id        Int       @id @default(autoincrement())
+  productId Int       @map("product_id")
+  sku       String?
+  listedOn  DateTime? @map("listed_on")
+
+  product Product @relation(fields: [productId], references: [id])
+
+  @@map("tbs_listings")
+}
+
+model TbsSale {
+  id        Int      @id @default(autoincrement())
+  storeId   Int      @map("store_id")
+  productId Int?     @map("product_id")
+  period    DateTime
+  units     Int
+
+  store TbsStore @relation(fields: [storeId], references: [id])
+
+  @@index([storeId, period])
+  @@map("tbs_sales")
+}
