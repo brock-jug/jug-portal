@@ -1,5 +1,16 @@
 # PROGRESS (newest first)
 
+## 2026-11-07 — M0.3 Pricing rules
+**Executive summary**
+Tonight I built the pricing engine: given a customer account and a product, it looks up the right price for that account's price tier (the old system has 24 tiers), and prices a whole order from those. New orders always come out as the sum of the line items with $0 tax and $0 deposit, and automated tests prove it. Everything still builds and all 10 checks pass. Foundation (M0) is now 3 of 7 tasks done; next are logins, permissions, fake sample data, and the basic screens. Tomorrow night: M0.4, staff and customer login.
+
+**Technical notes**
+- `src/lib/pricing.ts`: pure functions (price book built from ProductPrice rows, `unitPriceCents`, `priceLines`, `MissingPriceError`); no DB access so it is easy to test. Callers load rows and convert Decimal dollars via `priceRowFromDb`.
+- Accounts with no pricing category, or products unpriced in a category, are treated as unpriced (order entry must block or flag these).
+- `pricingClass` string on Account is kept but unused; the importer (M5) should decide whether it maps to a category.
+- `npm ci` was needed in the fresh sandbox; no dependency changes.
+- Questions for Brock: none.
+
 ## 2026-11-06 — M0.2 Database design
 **Executive summary**
 Tonight I designed the full database layout for the new system: every table the old vendor system holds (staff, customers, accounts, products, orders, inventory, kegs, bills of lading, pickups, rep notes, accounting log, Beer Store data) now has a home. Order tax and deposit fields are kept only so old orders can be imported exactly; new orders always get $0 for both. The app still builds and all checks pass. Foundation (M0) is now 2 of 7 tasks done; next comes the product pricing rules, then logins and permissions, then fake sample data. Tomorrow night: M0.3, the pricing module (how each account's price for each product is looked up).
